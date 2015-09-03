@@ -3,7 +3,7 @@ Copy all the folders under My Pictures to Flickr, and place them in sets accordi
 
 # Running the program
 
-If you just want to use the program, unzip MyPicturesSync.zip anywhere, and run it.
+If you just want to use the program, unzip MyPicturesSync.zip anywhere, and run it. You can download it from the release tab on GitHub at https://github.com/nikkilocke/MyPicturesSync/releases 
 
 The first time you use it, it will open a web page on Flickr, asking if you give it permission to upload pictures. 
 If you give permission, you will be given a Verifier code - copy this into the Verifier Code box in the
