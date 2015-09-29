@@ -348,7 +348,8 @@ namespace MyPicturesSync {
 					day = " on " + start.ToString("dddd");
 				}
 				Form.Log("Waiting until {0:HH:mm}{1}", start, day);
-				if (signal.WaitOne(start - DateTime.Now)) {
+				int msec = (int)(start - DateTime.Now).TotalMilliseconds;
+				if (msec > 0 && signal.WaitOne(msec)) {
 					Form.Status("Interrupted");
 					return true;
 				}
