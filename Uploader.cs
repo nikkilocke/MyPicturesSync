@@ -151,11 +151,13 @@ namespace MyPicturesSync {
 		public Dictionary<string, Set> AltSets;
 
 		public void Start() {
+			Form.Log("Start");
 			task.Start();
 		}
 
 		public void Stop() {
 			if (task != null) {
+				Form.Log("Stop");
 				signal.Set();
 			}
 		}
@@ -170,6 +172,7 @@ namespace MyPicturesSync {
 			Regex alt = new Regex(@"^[\d- ]*(.*?)$", RegexOptions.Compiled);
 			do {
 				try {
+					Form.Log("Starting");
 					Form.Sets = Sets = new Dictionary<string, Set>();
 					Form.AltSets = AltSets = new Dictionary<string, Set>();
 					Form.ClearFolders();
@@ -209,7 +212,7 @@ namespace MyPicturesSync {
 					}
 					Form.Status("");
 					if (Settings.Default.AccessToken == null) {
-						Form.Status("Not logged in");
+						Form.Log("Not logged in");
 						return;
 					}
 					// Wait until start time (if a start time is specified)
@@ -347,8 +350,9 @@ namespace MyPicturesSync {
 					start = start.AddDays(1);
 					day = " on " + start.ToString("dddd");
 				}
-				Form.Log("Waiting until {0:HH:mm}{1}", start, day);
-				int msec = (int)(start - DateTime.Now).TotalMilliseconds;
+				TimeSpan delay = start - DateTime.Now;
+				Form.Log("Waiting {2} until {0:HH:mm}{1}", start, day, delay);
+				int msec = (int)delay.TotalMilliseconds;
 				if (msec > 0 && signal.WaitOne(msec)) {
 					Form.Status("Interrupted");
 					return true;

@@ -200,9 +200,9 @@ namespace MyPicturesSync {
 			if (string.IsNullOrWhiteSpace(message)) {
 				Error("");
 			} else {
-				Error(string.Format("{0:HH:mm} {1}", DateTime.Now, message.Split('\n')[0]));
 				using (StreamWriter w = new StreamWriter("MyPicturesSync.log", true))
 					w.WriteLine(DateTime.Now.ToString("s") + ":" + message);
+				Error(string.Format("{0:HH:mm} {1}", DateTime.Now, message.Split('\n')[0]));
 			}
 		}
 
@@ -255,9 +255,9 @@ namespace MyPicturesSync {
 		/// Log and display something in the status box
 		/// </summary>
 		public void Log(string message) {
-			Status(message.Split('\n')[0]);
 			using (StreamWriter w = new StreamWriter("MyPicturesSync.log", true))
 				w.WriteLine(DateTime.Now.ToString("s") + ":" + message);
+			Status(message.Split('\n')[0]);
 		}
 
 		/// <summary>
