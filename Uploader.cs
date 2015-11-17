@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Microsoft.Win32;
 using FlickrNet;
 
 namespace MyPicturesSync {
@@ -150,6 +151,13 @@ namespace MyPicturesSync {
 		/// </summary>
 		public Dictionary<string, Set> AltSets;
 
+		void Log(string s) {
+			if (Settings.Default.WaitLogging) {
+				using (StreamWriter w = new StreamWriter("Wait.log", true))
+					w.WriteLine(DateTime.Now.ToString("s") + ":" + s);
+			}
+		}
+
 		public void Start() {
 			Form.Log("Start");
 			task.Start();
@@ -170,156 +178,171 @@ namespace MyPicturesSync {
 			// some text has been added to provide a meaningful name. This regex extracts the
 			// meaningful part of the name in group 1
 			Regex alt = new Regex(@"^[\d- ]*(.*?)$", RegexOptions.Compiled);
-			do {
-				try {
-					Form.Log("Starting");
-					Form.Sets = Sets = new Dictionary<string, Set>();
-					Form.AltSets = AltSets = new Dictionary<string, Set>();
-					Form.ClearFolders();
-					Form.LogError("");
-					foreach (string folder in Directory.EnumerateDirectories(Settings.Default.Folder)) {
-						if (TaskCancelled()) return;
-						Form.Status("Loading folder {0}", folder);
-						Set s = new Set(folder);
-						if (s.Photos.Count > 0) {
-							Match m = alt.Match(s.Folder.Name);
-							if (m.Success) {
-								// The folder name starts with a date
-								string key = m.Groups[1].Value;
-								if (key == "") {
-									Form.Error("Ignored folder {0} with no description");
-									continue;
-								}
-								// Index set by name part only, in case date has been removed from Flickr set name
-								AltSets[key] = s;
-							}
-							Sets[s.Folder.Name] = s;
-							Form.AddFolder(s);
-						}
-					}
-					// Have finished building local folder list
-					Form.Status("");
-					// Now compute hashes
-					foreach (Set s in Sets.Values) {
-						if (TaskCancelled()) return;
-						Form.Status("Checking folder {0}", s.Folder.Name);
-						int i = 0;
-						foreach (PhotoInfo p in s.Photos) {
-							if (TaskCancelled()) return;
-							p.LoadHash();
-							Form.UpdatePhoto(s, i++);
-						}
-					}
-					Form.Status("");
-					if (Settings.Default.AccessToken == null) {
-						Form.Log("Not logged in");
-						return;
-					}
-					// Wait until start time (if a start time is specified)
-					if (Wait(false)) return;
-					// Prevent computer going to sleep during upload
-					uint executionState = NativeMethods.SetThreadExecutionState(NativeMethods.ES_CONTINUOUS | NativeMethods.ES_SYSTEM_REQUIRED);
-					if (executionState == 0)
-						Form.LogError("SetThreadExecutionState failed.");
+			PowerModeChangedEventHandler eh = null;
+			if (Settings.Default.WaitLogging) {
+				Log("Adding power handler");
+				eh = new PowerModeChangedEventHandler(delegate(object sender, PowerModeChangedEventArgs e) {
+					Log("Power " + e.Mode);
+				});
+				SystemEvents.PowerModeChanged += eh;
+			}
+			try {
+				do {
 					try {
-						Form.Status("Downloading Flickr sets");
-						// Get Flickr sets
-						PhotosetCollection sets = Flickr.PhotosetsGetList(1, 1000);
-						if (TaskCancelled()) return;
-						foreach (Photoset set in sets) {
-							Set ours;
-							// Match Flickr sets to ours
-							if (Sets.TryGetValue(set.Title, out ours) || AltSets.TryGetValue(set.Title, out ours)) {
-								ours.Id = set.PhotosetId;
+						Form.Log("Starting");
+						Form.Sets = Sets = new Dictionary<string, Set>();
+						Form.AltSets = AltSets = new Dictionary<string, Set>();
+						Form.ClearFolders();
+						Form.LogError("");
+						foreach (string folder in Directory.EnumerateDirectories(Settings.Default.Folder)) {
+							if (TaskCancelled()) return;
+							Form.Status("Loading folder {0}", folder);
+							Set s = new Set(folder);
+							if (s.Photos.Count > 0) {
+								Match m = alt.Match(s.Folder.Name);
+								if (m.Success) {
+									// The folder name starts with a date
+									string key = m.Groups[1].Value;
+									if (key == "") {
+										Form.Error("Ignored folder {0} with no description");
+										continue;
+									}
+									// Index set by name part only, in case date has been removed from Flickr set name
+									AltSets[key] = s;
+								}
+								Sets[s.Folder.Name] = s;
+								Form.AddFolder(s);
 							}
 						}
+						// Have finished building local folder list
+						Form.Status("");
+						// Now compute hashes
 						foreach (Set s in Sets.Values) {
 							if (TaskCancelled()) return;
-							// Photos matched in the Flickr set
-							HashSet<PhotoInfo> matched = new HashSet<PhotoInfo>();
-							bool changed = false;
-							if (s.Id != null) {
-								// There is a Flickr set - get Flickr's list of photos in the set
-								Form.Status("Downloading photo details for set {0}", s.Folder.Name);
-								foreach (Photo p in Flickr.PhotosetsGetPhotos(s.Id, PhotoSearchExtras.DateUploaded, 1, 1000)) {
-									if (TaskCancelled()) return;
-									// Match by Id, name, file name or description
-									PhotoInfo info = s.Photos.FirstOrDefault(pf => pf.Flickr.Id == p.PhotoId
-										|| pf.Name == p.Title
-										|| pf.FileName == p.Title
-										|| pf.Description == p.Description);
-									if (info != null) {
-										matched.Add(info);
-										if (info.Flickr.Uploaded != p.DateUploaded)
-											changed = true;
-										info.Flickr.Id = p.PhotoId;
-										info.Flickr.Uploaded = p.DateUploaded;
-									}
-								}
-							}
-							// Now look for local photos not in the Flickr set
-							foreach (PhotoInfo p in s.Photos) {
-								if (!matched.Contains(p)) {
-									if (p.Flickr.Id != null) {
-										// Photo is already on Flickr, but is not in this set
-										if (TaskCancelled()) return;
-										if (DateTime.Now >= stop) {
-											Form.Log("Reached stop time");
-											return;
-										}
-										try {
-											Flickr.PhotosetsAddPhoto(s.Id, p.Flickr.Id);
-										} catch {
-											// Cannot add photo - perhaps it was deleted from Flickr - mark it as missing
-											p.Flickr.Id = null;
-											p.Flickr.Uploaded = null;
-											changed = true;
-										}
-									}
-								}
-							}
-							if (changed)
-								Form.UpdateSet(s);
-							// Upload remaining photos
+							Form.Status("Checking folder {0}", s.Folder.Name);
+							int i = 0;
 							foreach (PhotoInfo p in s.Photos) {
 								if (TaskCancelled()) return;
-								if (p.Flickr.Id != null)
-									continue;	// Photo is already on Flickr
-								if (DateTime.Now >= stop) {
-									Form.Log("Reached stop time");
-									return;
-								}
-								Form.Log("Uploading {0}", p.FullName);
-								try {
-									if (TaskCancelled()) return;
-									p.Flickr.Id = Flickr.UploadPicture(p.FullName, p.Name, p.Description, "", false, true, false);
-									p.Flickr.Uploaded = DateTime.Now;
-									if (changed)
-										Form.UpdatePhoto(s, s.Photos.IndexOf(p));
-									if (s.Id == null) {
-										Form.Log("Creating set {0}", s.Folder.Name);
-										s.Id = Flickr.PhotosetsCreate(s.Folder.Name, p.Flickr.Id).PhotosetId;
-									} else {
-										Flickr.PhotosetsAddPhoto(s.Id, p.Flickr.Id);
-									}
-								} catch (Exception ex) {
-									Form.LogError("Exception: {0}", ex);
-								}
+								p.LoadHash();
+								Form.UpdatePhoto(s, i++);
 							}
 						}
 						Form.Status("");
-						Form.LogError("Completed");
-					} finally {
-						if (executionState != 0)
-							NativeMethods.SetThreadExecutionState(executionState);
+						if (Settings.Default.AccessToken == null) {
+							Form.Log("Not logged in");
+							return;
+						}
+						// Wait until start time (if a start time is specified)
+						if (Wait(false)) return;
+						// Prevent computer going to sleep during upload
+						uint executionState = NativeMethods.SetThreadExecutionState(NativeMethods.ES_CONTINUOUS | NativeMethods.ES_SYSTEM_REQUIRED);
+						if (executionState == 0)
+							Form.LogError("SetThreadExecutionState failed.");
+						try {
+							Form.Status("Downloading Flickr sets");
+							// Get Flickr sets
+							PhotosetCollection sets = Flickr.PhotosetsGetList(1, 1000);
+							if (TaskCancelled()) return;
+							foreach (Photoset set in sets) {
+								Set ours;
+								// Match Flickr sets to ours
+								if (Sets.TryGetValue(set.Title, out ours) || AltSets.TryGetValue(set.Title, out ours)) {
+									ours.Id = set.PhotosetId;
+								}
+							}
+							foreach (Set s in Sets.Values) {
+								if (TaskCancelled()) return;
+								// Photos matched in the Flickr set
+								HashSet<PhotoInfo> matched = new HashSet<PhotoInfo>();
+								bool changed = false;
+								if (s.Id != null) {
+									// There is a Flickr set - get Flickr's list of photos in the set
+									Form.Status("Downloading photo details for set {0}", s.Folder.Name);
+									foreach (Photo p in Flickr.PhotosetsGetPhotos(s.Id, PhotoSearchExtras.DateUploaded, 1, 1000)) {
+										if (TaskCancelled()) return;
+										// Match by Id, name, file name or description
+										PhotoInfo info = s.Photos.FirstOrDefault(pf => pf.Flickr.Id == p.PhotoId
+											|| pf.Name == p.Title
+											|| pf.FileName == p.Title
+											|| pf.Description == p.Description);
+										if (info != null) {
+											matched.Add(info);
+											if (info.Flickr.Uploaded != p.DateUploaded)
+												changed = true;
+											info.Flickr.Id = p.PhotoId;
+											info.Flickr.Uploaded = p.DateUploaded;
+										}
+									}
+								}
+								// Now look for local photos not in the Flickr set
+								foreach (PhotoInfo p in s.Photos) {
+									if (!matched.Contains(p)) {
+										if (p.Flickr.Id != null) {
+											// Photo is already on Flickr, but is not in this set
+											if (TaskCancelled()) return;
+											if (DateTime.Now >= stop) {
+												Form.Log("Reached stop time");
+												return;
+											}
+											try {
+												Flickr.PhotosetsAddPhoto(s.Id, p.Flickr.Id);
+											} catch {
+												// Cannot add photo - perhaps it was deleted from Flickr - mark it as missing
+												p.Flickr.Id = null;
+												p.Flickr.Uploaded = null;
+												changed = true;
+											}
+										}
+									}
+								}
+								if (changed)
+									Form.UpdateSet(s);
+								// Upload remaining photos
+								foreach (PhotoInfo p in s.Photos) {
+									if (TaskCancelled()) return;
+									if (p.Flickr.Id != null)
+										continue;	// Photo is already on Flickr
+									if (DateTime.Now >= stop) {
+										Form.Log("Reached stop time");
+										return;
+									}
+									Form.Log("Uploading {0}", p.FullName);
+									try {
+										if (TaskCancelled()) return;
+										p.Flickr.Id = Flickr.UploadPicture(p.FullName, p.Name, p.Description, "", false, true, false);
+										p.Flickr.Uploaded = DateTime.Now;
+										if (changed)
+											Form.UpdatePhoto(s, s.Photos.IndexOf(p));
+										if (s.Id == null) {
+											Form.Log("Creating set {0}", s.Folder.Name);
+											s.Id = Flickr.PhotosetsCreate(s.Folder.Name, p.Flickr.Id).PhotosetId;
+										} else {
+											Flickr.PhotosetsAddPhoto(s.Id, p.Flickr.Id);
+										}
+									} catch (Exception ex) {
+										Form.LogError("Exception: {0}", ex);
+									}
+								}
+							}
+							Form.Status("");
+							Form.LogError("Completed");
+						} finally {
+							if (executionState != 0)
+								NativeMethods.SetThreadExecutionState(executionState);
+						}
+					} catch (Exception ex) {
+						try {
+							Form.LogError("Exception: {0}", ex);
+						} catch {
+						}
 					}
-				} catch (Exception ex) {
-					try {
-						Form.LogError("Exception: {0}", ex);
-					} catch {
-					}
+				} while (!Wait(true));
+			} finally {
+				if (eh != null) {
+					Log("Removing power handler");
+					SystemEvents.PowerModeChanged -= eh;
 				}
-			} while (Wait(true));
+			}
 		}
 
 		/// <summary>
@@ -339,6 +362,7 @@ namespace MyPicturesSync {
 		/// <param name="next">Wait until start time tomorrow</param>
 		/// <returns>true if stop signal was received</returns>
 		bool Wait(bool next) {
+			Log("Wait");
 			DateTime start = DateTime.Now;
 			// Have they specified to start and stop in the same day, and we have already passed stop time?
 			if (Settings.Default.Start < Settings.Default.Stop && start.Hour >= Settings.Default.Stop)
@@ -351,17 +375,24 @@ namespace MyPicturesSync {
 					day = " on " + start.ToString("dddd");
 				}
 				TimeSpan delay = start - DateTime.Now;
-				Form.Log("Waiting {2} until {0:HH:mm}{1}", start, day, delay);
+				Form.Log("Waiting until {0:HH:mm}{1}", start, day);
 				int msec = (int)delay.TotalMilliseconds;
-				if (msec > 0 && signal.WaitOne(msec)) {
-					Form.Status("Interrupted");
-					return true;
+				while (start > DateTime.Now) {
+					delay = start - DateTime.Now;
+					msec = Math.Min((int)delay.TotalMilliseconds, 30 * 60 * 1000);	// 30 mins
+					if (msec > 0 && signal.WaitOne(msec)) {
+						Log("Interrupted");
+						Form.Status("Interrupted");
+						return true;
+					}
+					Log("Tick");
 				}
 			}
 			// Have they specified a stop time?
 			stop = Settings.Default.Stop >= 24 ? DateTime.MaxValue : new DateTime(start.Year, start.Month, start.Day, Settings.Default.Stop, 0, 0);
 			if (stop < start)
 				stop = stop.AddDays(1);
+			Log("Wait ended");
 			return false;
 		}
 

@@ -33,5 +33,8 @@
     <Setting Name="ColumnWidths" Type="System.String" Scope="User">
       <Value Profile="(Default)">200</Value>
     </Setting>
+    <Setting Name="WaitLogging" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
   </Settings>
 </SettingsFile>
