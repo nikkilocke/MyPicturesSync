@@ -204,7 +204,7 @@ namespace MyPicturesSync {
 									// The folder name starts with a date
 									string key = m.Groups[1].Value;
 									if (key == "") {
-										Form.Error("Ignored folder {0} with no description");
+										Form.Error("Ignored folder {0} with no description", folder);
 										continue;
 									}
 									// Index set by name part only, in case date has been removed from Flickr set name
